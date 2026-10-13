@@ -161,4 +161,92 @@ router.post("/messages/:userId", requireUserId, async (req, res) => {
     } catch (error) { res.status(500).json({ message: "Failed to send direct message" }); }
 });
 
+router.get("/notifications", requireUserId, async (req, res) => {
+    try {
+        const Resource = require("../models/Resource");
+        const Event = require("../models/Event");
+
+        // 1. Pending friend requests received by user
+        const friendRequests = await FriendRequest.find({ receiver: req.userId, status: 'pending' })
+            .populate("sender", "name")
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .lean();
+
+        // 2. Recent direct messages received by user
+        const recentMessages = await DirectMessage.find({ receiver: req.userId })
+            .populate("sender", "name")
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .lean();
+
+        // 3. Newly uploaded resources (last 7 days or top 4)
+        const recentResources = await Resource.find({ status: 'approved' })
+            .populate("uploaded_by", "name")
+            .sort({ createdAt: -1 })
+            .limit(4)
+            .lean();
+
+        // 4. Upcoming / newly published events
+        const recentEvents = await Event.find({ status: 'published', starts_at: { $gte: new Date(Date.now() - 24 * 3600 * 1000) } })
+            .sort({ starts_at: 1 })
+            .limit(4)
+            .lean();
+
+        const notifs = [];
+
+        friendRequests.forEach(fr => {
+            notifs.push({
+                id: `fr-${fr._id}`,
+                title: `${fr.sender?.name || "A student"} sent you a friend request`,
+                time: fr.createdAt,
+                type: "friend",
+                link: "/community",
+                unread: true
+            });
+        });
+
+        recentMessages.forEach(dm => {
+            notifs.push({
+                id: `dm-${dm._id}`,
+                title: `New message from ${dm.sender?.name || "Student"}: "${dm.message.slice(0, 28)}${dm.message.length > 28 ? '...' : ''}"`,
+                time: dm.createdAt,
+                type: "message",
+                link: "/community",
+                unread: true
+            });
+        });
+
+        recentResources.forEach(resItem => {
+            notifs.push({
+                id: `res-${resItem._id}`,
+                title: `New ${resItem.resource_type}: ${resItem.title}`,
+                time: resItem.createdAt,
+                type: "resource",
+                link: "/academics",
+                unread: false
+            });
+        });
+
+        recentEvents.forEach(ev => {
+            notifs.push({
+                id: `ev-${ev._id}`,
+                title: `Upcoming ${ev.event_type}: ${ev.title}`,
+                time: ev.createdAt || ev.starts_at,
+                type: "event",
+                link: "/events",
+                unread: false
+            });
+        });
+
+        // Sort by newest time
+        notifs.sort((a, b) => new Date(b.time) - new Date(a.time));
+
+        res.json(notifs.slice(0, 10));
+    } catch (err) {
+        console.error("Notifications error:", err);
+        res.status(500).json({ message: "Failed to fetch notifications" });
+    }
+});
+
 module.exports = router;
